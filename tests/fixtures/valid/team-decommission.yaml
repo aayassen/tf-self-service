@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../../schema/team.v1.schema.json
+schema_version: 1
+
+owner:
+  github_team: my-org/payments
+  contact: "#payments-eng"
+  cost_center: "CC-1042"
+
+workload:
+  namespace: payments
+  service_account: payments-api
+
+lifecycle: decommission
+
+buckets:
+  - name: invoices
+    visibility: private
+  - name: web-assets
+    visibility: public
+    public:
+      mode: cloudfront
+      justification: "Static assets for the checkout page"
+  - name: integration-downloads
+    visibility: public
+    public:
+      mode: direct
+      justification: "Public sample files for development integrations"

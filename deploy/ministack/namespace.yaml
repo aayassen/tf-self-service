@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aws-emulator
+  labels:
+    app.kubernetes.io/part-of: platform-demo
+    pod-security.kubernetes.io/enforce: restricted

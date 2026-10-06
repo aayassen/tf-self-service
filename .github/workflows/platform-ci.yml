@@ -1,0 +1,40 @@
+# All tests that don't need AWS.
+name: platform-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: make fmt-check validate test
+      - run: conftest verify --policy policy
+      - run: make ci-test
+      - run: actionlint
+
+  # End-to-end test against a local AWS emulator.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - name: Start MiniStack
+        run: |
+          docker run -d --name ministack -p 4566:4566 \
+            -e MINISTACK_ACCOUNT_ID=123456789012 -e MINISTACK_REGION=eu-central-1 -e AUTH=false \
+            ministackorg/ministack@sha256:7a30ff0670578e10528b5a9a21e795ef494f96bbc35691c9b0742ea35de71808
+          for _ in $(seq 60); do curl -fsS localhost:4566/_ministack/health >/dev/null && exit 0; sleep 2; done
+          docker logs ministack; exit 1
+      - run: make e2e
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-logs
+          path: .out/e2e/logs/

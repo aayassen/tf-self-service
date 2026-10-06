@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../../schema/team.v1.schema.json
+schema_version: 1
+
+owner:
+  github_team: my-org/beta
+  contact: "#beta-eng"
+  cost_center: "CC-0002"
+
+workload:
+  namespace: beta
+  service_account: beta-app
+
+lifecycle: decommission   # team offboarding step 1 (scenario 08)
+
+buckets:
+  - name: data
+    visibility: private

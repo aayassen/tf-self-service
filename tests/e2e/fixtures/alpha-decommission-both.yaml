@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=../../../schema/team.v1.schema.json
+schema_version: 1
+
+owner:
+  github_team: my-org/alpha
+  contact: "#alpha-eng"
+  cost_center: "CC-0001"
+
+workload:
+  namespace: alpha
+  service_account: alpha-app
+
+lifecycle: active
+
+buckets:
+  - name: data
+    visibility: private
+  - name: public          # decommissioned in scenario 07; still holds precious.txt
+    visibility: public
+    public:
+      mode: direct
+      justification: "E2E: anonymous read-only fixture"
+    lifecycle: decommission
+  - name: reports         # step 1 for an empty bucket (scenario 12)
+    visibility: private
+    lifecycle: decommission

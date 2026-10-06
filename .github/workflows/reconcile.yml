@@ -1,0 +1,22 @@
+# Re-apply one team from main, e.g. after drift or a failed apply.
+name: reconcile
+on:
+  workflow_dispatch:
+    inputs:
+      team: { description: "Team (folder name under teams/)", required: true, type: string }
+      env:
+        description: Environment
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    uses: ./.github/workflows/_env.yml
+    with:
+      env: ${{ inputs.env }}
+      only: ${{ inputs.team }}
+    permissions: { contents: read, id-token: write }

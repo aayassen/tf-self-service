@@ -1,0 +1,144 @@
+# One environment: find changed teams → plan → (prod: approval) → apply → save progress.
+# Progress is the last applied commit, stored in the state bucket. If a run fails,
+# the next one picks up from there.
+name: environment
+on:
+  workflow_call:
+    inputs:
+      env: { type: string, required: true }
+      only: { type: string, required: false, default: "" } # reconcile: just this team
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  ACCOUNT: ${{ vars[format('AWS_ACCOUNT_{0}', inputs.env)] }}
+  STATE_BUCKET: tfstate-${{ inputs.env }}-${{ vars[format('AWS_ACCOUNT_{0}', inputs.env)] }}
+
+# One run per environment at a time; never cancel an apply halfway.
+concurrency:
+  group: apply-${{ inputs.env }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      base: ${{ steps.base.outputs.sha }}
+      matrix: ${{ steps.changes.outputs.matrix }}
+    steps:
+      - name: AWS account configured?
+        if: env.ACCOUNT == ''
+        run: echo "::error::Repository variable AWS_ACCOUNT_${{ inputs.env }} is not set" && exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT }}:role/gha-plan-${{ inputs.env }}
+          aws-region: eu-central-1
+      - name: Base commit (applied-SHA marker)
+        id: base
+        run: |
+          marker=$(aws s3 cp "s3://$STATE_BUCKET/_meta/last-applied.sha" - 2>/dev/null || true)
+          if [[ -n $marker ]] && git cat-file -e "$marker^{commit}" 2>/dev/null; then
+            echo "sha=$marker" >> "$GITHUB_OUTPUT"
+          else
+            # Nothing saved yet: plan every team.
+            echo "No usable marker; planning every ${{ inputs.env }} stack."
+            echo "sha=$(git hash-object -t tree /dev/null)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Affected stacks
+        id: changes
+        env: { ONLY: "${{ inputs.only }}", ENV: "${{ inputs.env }}" }
+        run: |
+          if [[ -z $ONLY ]]; then
+            echo "matrix=$(scripts/ci/changes.sh "${{ steps.base.outputs.sha }}" HEAD "$ENV")" >> "$GITHUB_OUTPUT"
+          else
+            # Reconcile: just this one team.
+            [[ -f "teams/$ONLY/$ENV.yaml" ]] || { echo "teams/$ONLY/$ENV.yaml does not exist"; exit 1; }
+            echo "matrix=$(jq -cn --arg e "$ENV" --arg t "$ONLY" '{include: [{id: "\($e)-1", env: $e, stacks: "\($t):apply", count: 1}]}')" >> "$GITHUB_OUTPUT"
+          fi
+
+  plan:
+    needs: detect
+    if: fromJSON(needs.detect.outputs.matrix).include[0] != null
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT }}:role/gha-plan-${{ inputs.env }}
+          aws-region: eu-central-1
+      - name: Plan (${{ matrix.count }} stack(s))
+        env:
+          EXECUTOR_ROLE_ARN: arn:aws:iam::${{ env.ACCOUNT }}:role/tofu-plan-${{ inputs.env }}
+          BASE_SHA: ${{ needs.detect.outputs.base }}
+        run: scripts/ci/run-stacks.sh plan "${{ inputs.env }}" "${{ matrix.stacks }}"
+      - name: Summary for the approver
+        if: always()
+        run: scripts/ci/summarize.sh .out >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plan-${{ matrix.id }}
+          path: .out/${{ inputs.env }}/
+          retention-days: 3 # saved plans are short-lived and may contain sensitive values
+
+  # One approval for the whole prod run (reviewers are set on "prod-approval").
+  approve:
+    needs: plan
+    if: inputs.env == 'prod'
+    runs-on: ubuntu-latest
+    environment: prod-approval
+    steps:
+      - run: echo "Approved the prod rollout (plans are in the plan jobs' summaries)."
+
+  # Running in the <env> environment is what allows assuming the apply role.
+  apply:
+    needs: [detect, plan, approve]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.approve.result == 'success' || needs.approve.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    strategy:
+      fail-fast: false # teams are independent; one broken stack never blocks the others
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: ./.github/actions/setup
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT }}:role/gha-apply-${{ inputs.env }}
+          aws-region: eu-central-1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: plan-${{ matrix.id }}
+          path: .out/${{ inputs.env }}
+      # If state changed since the plan, OpenTofu refuses it; just re-run.
+      - name: Apply saved plans (${{ matrix.count }} stack(s))
+        env:
+          EXECUTOR_ROLE_ARN: arn:aws:iam::${{ env.ACCOUNT }}:role/tofu-apply-${{ inputs.env }}
+          BASE_SHA: ${{ needs.detect.outputs.base }}
+        run: scripts/ci/run-stacks.sh apply "${{ inputs.env }}" "${{ matrix.stacks }}"
+
+  # Only when everything succeeded (or there was nothing to do).
+  marker:
+    needs: [plan, apply]
+    if: ${{ !cancelled() && inputs.only == '' && (needs.apply.result == 'success' || needs.plan.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT }}:role/gha-apply-${{ inputs.env }}
+          aws-region: eu-central-1
+      - name: Advance applied-SHA marker
+        run: echo "${{ github.sha }}" | aws s3 cp - "s3://$STATE_BUCKET/_meta/last-applied.sha"

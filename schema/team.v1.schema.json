@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.example/schema/team.v1.schema.json",
+  "title": "Team infrastructure declaration (v1)",
+  "description": "One file per team per environment: teams/<team>/<env>.yaml. The team and environment come from the file path, never from this file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "owner", "workload", "buckets"],
+  "properties": {
+    "schema_version": {
+      "description": "Version of this file format. Always 1 for now.",
+      "const": 1
+    },
+    "owner": {
+      "description": "Who owns these resources. Used for cost-allocation and ownership tags.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github_team", "contact", "cost_center"],
+      "properties": {
+        "github_team": {
+          "description": "GitHub team that owns this folder (must match the CODEOWNERS line), e.g. my-org/payments.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "examples": ["my-org/payments"]
+        },
+        "contact": {
+          "description": "Team Slack channel or alias. No personal emails.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "examples": ["#payments-eng"]
+        },
+        "cost_center": {
+          "description": "Finance cost center, copied to the platform:cost-center tag.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "examples": ["CC-1042"]
+        }
+      }
+    },
+    "workload": {
+      "description": "Kubernetes workload allowed to use the team role via EKS Pod Identity.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "service_account"],
+      "properties": {
+        "namespace": {
+          "description": "Kubernetes namespace. Must be <team> or start with <team>-.",
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+          "examples": ["payments"]
+        },
+        "service_account": {
+          "description": "Kubernetes ServiceAccount name in that namespace.",
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$",
+          "examples": ["payments-api"]
+        }
+      }
+    },
+    "lifecycle": {
+      "description": "Set to decommission to start offboarding the whole team (step 1 of 2). See README.md, 'Flows'.",
+      "enum": ["active", "decommission"],
+      "default": "active"
+    },
+    "buckets": {
+      "description": "S3 buckets for this team. The list length is how many buckets you get (1-20).",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": { "$ref": "#/$defs/bucket" }
+    }
+  },
+  "$defs": {
+    "bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "visibility"],
+      "properties": {
+        "name": {
+          "description": "Short bucket name, unique in this file. The real bucket is <env>-<team>-<name>.",
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$",
+          "not": { "pattern": "--" },
+          "examples": ["invoices"]
+        },
+        "visibility": {
+          "description": "REQUIRED, no default. private: only your team role. public: anyone on the internet can read objects (requires public.mode and public.justification).",
+          "enum": ["private", "public"]
+        },
+        "public": {
+          "description": "Only for visibility: public.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "justification"],
+          "properties": {
+            "mode": {
+              "description": "cloudfront (recommended): private bucket served through CloudFront. direct: anonymous read of the S3 bucket itself (prod needs platform approval).",
+              "enum": ["cloudfront", "direct"]
+            },
+            "justification": {
+              "description": "Why this data may be public. Shown to reviewers.",
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          }
+        },
+        "lifecycle": {
+          "description": "Set to decommission to start safely deleting this bucket (step 1 of 2). See README.md, 'Flows'.",
+          "enum": ["active", "decommission"],
+          "default": "active"
+        }
+      },
+      "if": {
+        "properties": { "visibility": { "const": "public" } },
+        "required": ["visibility"]
+      },
+      "then": { "required": ["public"] },
+      "else": { "not": { "required": ["public"] } }
+    }
+  }
+}

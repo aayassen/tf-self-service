@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../../schema/team.v1.schema.json
+# What a deleted team file is planned against (scenario 12): same owner/workload,
+# whole team decommissioned, no buckets left, so OpenTofu deletes or retains each one.
+schema_version: 1
+
+owner:
+  github_team: my-org/beta
+  contact: "#beta-eng"
+  cost_center: "CC-0002"
+
+workload:
+  namespace: beta
+  service_account: beta-app
+
+lifecycle: decommission
+
+buckets: []

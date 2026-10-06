@@ -1,0 +1,10 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.bin
+.tofu-mirror/
+.stakpak/
+crash.log
+.tfdata/
+.out/

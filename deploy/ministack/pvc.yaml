@@ -1,0 +1,10 @@
+# Keeps the emulator's data across pod restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ministack-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi

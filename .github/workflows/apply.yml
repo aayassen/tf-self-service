@@ -1,0 +1,25 @@
+# After merge: dev → staging → prod. Prod waits for one approval.
+name: apply
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # re-run to retry failed teams
+
+permissions:
+  contents: read
+
+jobs:
+  dev:
+    uses: ./.github/workflows/_env.yml
+    with: { env: dev }
+    permissions: { contents: read, id-token: write }
+  staging:
+    needs: dev
+    uses: ./.github/workflows/_env.yml
+    with: { env: staging }
+    permissions: { contents: read, id-token: write }
+  prod:
+    needs: staging
+    uses: ./.github/workflows/_env.yml
+    with: { env: prod }
+    permissions: { contents: read, id-token: write }

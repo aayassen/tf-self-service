@@ -1,0 +1,59 @@
+# MiniStack, a local AWS emulator (https://github.com/ministackorg/ministack).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ministack
+  labels: { app.kubernetes.io/name: ministack }
+spec:
+  replicas: 1
+  strategy: { type: Recreate } # one pod at a time (single volume)
+  selector:
+    matchLabels: { app.kubernetes.io/name: ministack }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ministack }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: ministack
+          # 1.5.21
+          image: ministackorg/ministack@sha256:7a30ff0670578e10528b5a9a21e795ef494f96bbc35691c9b0742ea35de71808
+          ports:
+            - { name: aws, containerPort: 4566 }
+          env:
+            # Must match envs/local.tfvars.
+            - { name: MINISTACK_ACCOUNT_ID, value: "123456789012" }
+            - { name: MINISTACK_REGION, value: eu-central-1 }
+            - { name: PERSIST_STATE, value: "1" }
+            - { name: STATE_DIR, value: /data/state }
+            - { name: S3_PERSIST, value: "1" }
+            - { name: S3_DATA_DIR, value: /data/s3 }
+            - { name: AUTH, value: "false" }
+          readinessProbe:
+            httpGet: { path: /_ministack/health, port: aws }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /_ministack/health, port: aws }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: ministack-data }
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../../../schema/team.v1.schema.json
+schema_version: 1
+
+owner:
+  github_team: my-org/alpha
+  contact: "#alpha-eng"
+  cost_center: "CC-0001"
+
+workload:
+  namespace: alpha
+  service_account: alpha-app
+
+lifecycle: active
+
+buckets:
+  - name: data
+    visibility: private
+  - name: public
+    visibility: public
+    public:
+      mode: direct
+      justification: "E2E: anonymous read-only fixture"
+  - name: reports        # added by scenario 04
+    visibility: private

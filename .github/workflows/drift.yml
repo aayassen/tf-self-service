@@ -1,0 +1,89 @@
+# Finds teams whose real resources no longer match main and lists them in an issue.
+# Nothing is fixed automatically; use the reconcile workflow.
+name: drift
+on:
+  schedule:
+    - cron: "0 2 * * *" # prod, nightly 02:00 UTC
+    - cron: "0 3 * * 0" # dev + staging, Sundays 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      env:
+        type: choice
+        options: [prod, staging, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    if: vars.AWS_ACCOUNT_DEV != ''
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.stacks.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - id: stacks
+        env:
+          ENVS: ${{ inputs.env || (github.event.schedule == '0 2 * * *' && 'prod' || 'dev staging') }}
+        run: |
+          # shellcheck disable=SC2086 # ENVS is a space-separated list
+          echo "matrix=$(scripts/ci/changes.sh --all $ENVS)" >> "$GITHUB_OUTPUT"
+
+  drift:
+    needs: detect
+    if: fromJSON(needs.detect.outputs.matrix).include[0] != null
+    runs-on: ubuntu-latest
+    permissions: { contents: read, id-token: write }
+    strategy:
+      fail-fast: false
+      max-parallel: 8 # stay under AWS API rate limits
+      matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
+    env:
+      AWS_RETRY_MODE: adaptive
+      AWS_MAX_ATTEMPTS: "10"
+      ACCOUNT: ${{ vars[format('AWS_ACCOUNT_{0}', matrix.env)] }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT }}:role/gha-plan-${{ matrix.env }}
+          aws-region: eu-central-1
+      - run: echo "EXECUTOR_ROLE_ARN=arn:aws:iam::$ACCOUNT:role/tofu-plan-${{ matrix.env }}" >> "$GITHUB_ENV"
+      - run: scripts/ci/run-stacks.sh drift "${{ matrix.env }}" "${{ matrix.stacks }}"
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: drift-${{ matrix.id }}
+          path: |
+            .out/drift-*.txt
+            .out/*/*/error.txt
+          if-no-files-found: ignore
+
+  report:
+    needs: [detect, drift]
+    if: ${{ always() && needs.detect.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: { contents: read, issues: write }
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { path: results, merge-multiple: true }
+      - name: Rolling drift issue per environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          for f in results/drift-*.txt; do
+            [[ -f $f ]] || continue
+            env=${f#results/drift-}; env=${env%.txt}
+            body=$(printf '%s\n\n%s\n\n%s\n' \
+              "Stacks whose real infrastructure differs from \`main\` (run: $RUN_URL):" \
+              "$(sort -u "$f" | sed 's#^#- [ ] teams/#; s#$#/'"$env"'.yaml#')" \
+              "Fix: revert the manual change, or update the YAML. Then run the **reconcile** workflow.")
+            title="Drift report: $env"
+            num=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+            if [[ -n $num ]]; then gh issue edit "$num" --body "$body"; else gh issue create --title "$title" --body "$body" --label drift; fi
+          done
+          if compgen -G "results/*/*/error.txt" >/dev/null; then echo "Some drift checks errored; see the drift job logs."; exit 1; fi

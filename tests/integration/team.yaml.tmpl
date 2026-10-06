@@ -1,0 +1,21 @@
+schema_version: 1
+
+owner:
+  github_team: my-org/platform
+  contact: "#platform"
+  cost_center: "CC-PLATFORM"
+
+workload:
+  namespace: __TEAM__
+  service_account: __TEAM__-app
+
+lifecycle: active
+
+buckets:
+  - name: data
+    visibility: private
+  - name: public
+    visibility: public
+    public:
+      mode: direct
+      justification: "integration test probe"

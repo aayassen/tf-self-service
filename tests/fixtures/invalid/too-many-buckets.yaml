@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=../../../schema/team.v1.schema.json
+schema_version: 1
+
+owner:
+  github_team: my-org/payments
+  contact: "#payments-eng"
+  cost_center: "CC-1042"
+
+workload:
+  namespace: payments
+  service_account: payments-api
+
+lifecycle: active
+
+buckets:
+  - name: bucket0
+    visibility: private
+  - name: bucket1
+    visibility: private
+  - name: bucket2
+    visibility: private
+  - name: bucket3
+    visibility: private
+  - name: bucket4
+    visibility: private
+  - name: bucket5
+    visibility: private
+  - name: bucket6
+    visibility: private
+  - name: bucket7
+    visibility: private
+  - name: bucket8
+    visibility: private
+  - name: bucket9
+    visibility: private
+  - name: bucket10
+    visibility: private
+  - name: bucket11
+    visibility: private
+  - name: bucket12
+    visibility: private
+  - name: bucket13
+    visibility: private
+  - name: bucket14
+    visibility: private
+  - name: bucket15
+    visibility: private
+  - name: bucket16
+    visibility: private
+  - name: bucket17
+    visibility: private
+  - name: bucket18
+    visibility: private
+  - name: bucket19
+    visibility: private
+  - name: bucket20
+    visibility: private
