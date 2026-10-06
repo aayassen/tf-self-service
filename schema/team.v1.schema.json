@@ -18,7 +18,7 @@
       "required": ["github_team", "contact", "cost_center"],
       "properties": {
         "github_team": {
-          "description": "GitHub team that owns this folder (must match the CODEOWNERS line), e.g. my-org/payments.",
+          "description": "GitHub team that owns this folder, e.g. my-org/payments.",
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
           "examples": ["my-org/payments"]

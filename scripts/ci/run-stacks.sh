@@ -3,6 +3,7 @@
 #   usage: run-stacks.sh <plan|apply|drift> <env> "<team:action> <team:action> ..."
 # action is "apply", or "destroy" when the team file was deleted.
 # One failing team never stops the others; the job fails at the end.
+# apply skips teams whose plan failed or had no changes.
 set -euo pipefail
 REPO=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 mode=$1 env=$2 stacks=$3
@@ -15,7 +16,7 @@ team_credentials() {
   local creds
   creds=$(aws sts assume-role --role-arn "$EXECUTOR_ROLE_ARN" \
     --role-session-name "ci-$1-${GITHUB_RUN_ID:-local}" --tags "Key=team,Value=$1" \
-    --query Credentials --output json)
+    --query Credentials --output json) || return 1
   AWS_ACCESS_KEY_ID=$(jq -r .AccessKeyId <<<"$creds")
   AWS_SECRET_ACCESS_KEY=$(jq -r .SecretAccessKey <<<"$creds")
   AWS_SESSION_TOKEN=$(jq -r .SessionToken <<<"$creds")
@@ -31,30 +32,37 @@ publish_outputs() {
 }
 
 # Runs in a subshell, so one team's credentials never leak to the next.
+# set -e doesn't apply in here (it runs inside an if), hence the explicit returns.
 run_stack() {
   local team=$1 action=$2 out="$REPO/.out/$env/$1" status=0
   mkdir -p "$out"
   export OUT_DIR=$out
+  [[ $mode == apply ]] || rm -f "$out/no-changes" "$out/error.txt"
+  if [[ $mode == apply && $action == apply ]]; then
+    [[ -f $out/plan.bin ]] || { echo "skipped: no saved plan (the plan failed)"; return 0; }
+    [[ ! -f $out/no-changes ]] || { echo "skipped: no changes"; return 0; }
+  fi
   if [[ $action == destroy ]]; then
     # The file is gone: use its last version with no buckets left.
     export CONFIG_FILE="$out/offboard.yaml"
     git -C "$REPO" show "${BASE_SHA:?BASE_SHA is required for destroy}:teams/$team/$env.yaml" \
-      | yq '.lifecycle = "decommission" | .buckets = []' >"$CONFIG_FILE"
+      | yq '.lifecycle = "decommission" | .buckets = []' >"$CONFIG_FILE" || return 1
   fi
-  team_credentials "$team"
+  team_credentials "$team" || { echo "could not get credentials for $team" >"$out/error.txt"; return 1; }
   "$REPO/scripts/tf.sh" init "$team" "$env" >"$out/init.log" 2>&1 || { cp "$out/init.log" "$out/error.txt"; return 1; }
   case $mode in
     drift)
-      TF_PLAN_LOCK=false "$REPO/scripts/tf.sh" plan "$team" "$env" >"$out/plan.log" 2>&1 || status=$?
+      "$REPO/scripts/tf.sh" plan "$team" "$env" >"$out/plan.log" 2>&1 || status=$?
       case $status in
         0) ;;
-        2) echo "$team" >>"$REPO/.out/drift-$env.txt" ;;
+        2) echo "$team" >>"$REPO/.out/drift-$env-${MATRIX_ID:-1}.txt" ;;
         *) cp "$out/plan.log" "$out/error.txt"; return 1 ;;
       esac
       ;;
     plan)
       "$REPO/scripts/tf.sh" plan "$team" "$env" >"$out/plan.log" 2>&1 || status=$?
       if [[ $status != 0 && $status != 2 ]]; then cp "$out/plan.log" "$out/error.txt"; return 1; fi
+      [[ $status == 2 ]] || touch "$out/no-changes"
       ;;
     apply)
       "$REPO/scripts/tf.sh" apply "$team" "$env" >"$out/apply.log" 2>&1 || { cp "$out/apply.log" "$out/error.txt"; return 1; }

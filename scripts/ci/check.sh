@@ -14,7 +14,7 @@ json_at() { git show "$1:$2" 2>/dev/null | yq -o=json '.' 2>/dev/null || echo nu
 
 changed=$(git diff --name-status --no-renames "$base" "$head")
 team_changes=$(awk -F'\t' '$2 ~ /^teams\//' <<<"$changed")
-other_changes=$(awk -F'\t' '$2 !~ /^teams\// && $2 != ".github/CODEOWNERS" { print $2 }' <<<"$changed")
+other_changes=$(awk -F'\t' '$2 !~ /^teams\// { print $2 }' <<<"$changed")
 
 # Team files must be teams/<team>/<env>.yaml
 while IFS=$'\t' read -r status path; do

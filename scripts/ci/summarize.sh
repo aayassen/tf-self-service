@@ -12,7 +12,7 @@ changes() {
     def verb: if index("create") and index("delete") then "♻️ replace"
               elif index("create") then "➕ create" elif index("delete") then "➖ delete"
               else "✏️ update" end;
-    [.resource_changes[] | select(.change.actions != ["no-op"] and .change.actions != ["read"])
+    [(.resource_changes // [])[] | select(.change.actions != ["no-op"] and .change.actions != ["read"])
       | . + {bucket: (.address | capture("module\\.bucket\\[\"(?<k>[^\"]+)\"\\]").k? // null)}] as $rc
     | ($rc | map(select(.bucket)) | group_by(.bucket)[] | . as $g | $g[0].bucket as $b
         | ([$g[] | select(.type == "aws_s3_bucket") | .change.actions[]] | unique) as $main
@@ -40,7 +40,7 @@ if [[ -s $findings ]]; then
   echo
 fi
 
-rows=() details=() public=false failed=false retained=false
+rows=() details=() public=false failed=false retained=false unchanged=0
 for stack in "$dir"/*/*/; do
   [[ -d $stack ]] || continue
   env=$(basename "$(dirname "$stack")") team=$(basename "$stack")
@@ -50,23 +50,26 @@ for stack in "$dir"/*/*/; do
     details+=("<details><summary>$env/$team error</summary>" "" '```' "$(tail -40 "$stack/error.txt")" '```' "</details>")
   elif [[ -f $stack/plan.json ]]; then
     lines=$(changes "$stack/plan.json" "$stack/retain.txt")
+    if [[ -z $lines ]]; then unchanged=$((unchanged + 1)); continue; fi
     [[ $lines == *"⚠️ public"* ]] && public=true
     [[ $lines == *"📦 retain"* ]] && retained=true
-    rows+=("| $env | $team | ${lines:-no changes} |")
+    rows+=("| $env | $team | $lines |")
   fi
 done
-rows=("${rows[@]//$'\n'/<br>}")
+max_rows=200 # GitHub comments are limited to 65k characters
 
-if ((${#rows[@]} == 0)); then
+if ((${#rows[@]} == 0 && unchanged == 0)); then
   echo 'No team stacks are affected by this change.'
 else
-  echo '| Env | Team | Changes |'
-  echo '|---|---|---|'
-  printf '%s\n' "${rows[@]}" | sort
-  echo
+  if ((${#rows[@]} > 0)); then
+    echo '| Env | Team | Changes |'
+    echo '|---|---|---|'
+    printf '%s\n' "${rows[@]//$'\n'/<br>}" | sort | head -n "$max_rows"
+    ((${#rows[@]} <= max_rows)) || echo "| … | … | $((${#rows[@]} - max_rows)) more, see the workflow logs |"
+    echo
+  fi
+  ((unchanged == 0)) || { echo "✅ $unchanged team stack(s) with no changes."; echo; }
   $public && echo '⚠️ **Public exposure:** objects in buckets marked public will be readable by anyone. Check the justification.' && echo
   $failed && printf '%s\n' "${details[@]}" && echo
   $retained && echo '📦 **Retain:** removed from the team file but not empty, so it is kept private and tagged `platform:lifecycle=retained` instead of deleted.' && echo
 fi
-echo
-echo '**Next:** code-owner review → merge → dev and staging apply automatically → prod applies after platform approval.'
