@@ -12,6 +12,10 @@ permissions:
   contents: read
   id-token: write
 
+defaults:
+  run:
+    shell: bash # adds pipefail, so a failing command in a pipe fails the step
+
 env:
   ACCOUNT: ${{ vars[format('AWS_ACCOUNT_{0}', inputs.env)] }}
   STATE_BUCKET: tfstate-${{ inputs.env }}-${{ vars[format('AWS_ACCOUNT_{0}', inputs.env)] }}
@@ -54,7 +58,8 @@ jobs:
         env: { ONLY: "${{ inputs.only }}", ENV: "${{ inputs.env }}" }
         run: |
           if [[ -z $ONLY ]]; then
-            echo "matrix=$(scripts/ci/changes.sh "${{ steps.base.outputs.sha }}" HEAD "$ENV")" >> "$GITHUB_OUTPUT"
+            matrix=$(scripts/ci/changes.sh "${{ steps.base.outputs.sha }}" HEAD "$ENV")
+            echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
           else
             # Reconcile: just this one team.
             [[ -f "teams/$ONLY/$ENV.yaml" ]] || { echo "teams/$ONLY/$ENV.yaml does not exist"; exit 1; }
@@ -85,29 +90,32 @@ jobs:
       - name: Summary for the approver
         if: always()
         run: scripts/ci/summarize.sh .out >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plan-${{ matrix.id }}
           path: .out/${{ inputs.env }}/
-          retention-days: 3 # saved plans are short-lived and may contain sensitive values
+          include-hidden-files: true
+          retention-days: 7 # long enough to wait for the prod approval
 
   # One approval for the whole prod run (reviewers are set on "prod-approval").
   approve:
     needs: plan
-    if: inputs.env == 'prod'
+    if: ${{ !cancelled() && inputs.env == 'prod' && needs.plan.result != 'skipped' }}
     runs-on: ubuntu-latest
     environment: prod-approval
     steps:
       - run: echo "Approved the prod rollout (plans are in the plan jobs' summaries)."
 
+  # Teams whose plan failed are skipped; the others still apply.
   # Running in the <env> environment is what allows assuming the apply role.
   apply:
     needs: [detect, plan, approve]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.approve.result == 'success' || needs.approve.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.detect.result == 'success' && needs.plan.result != 'skipped' && (needs.approve.result == 'success' || needs.approve.result == 'skipped') }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.env }}
     strategy:
-      fail-fast: false # teams are independent; one broken stack never blocks the others
+      fail-fast: false
       max-parallel: 20
       matrix: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
@@ -129,10 +137,11 @@ jobs:
           BASE_SHA: ${{ needs.detect.outputs.base }}
         run: scripts/ci/run-stacks.sh apply "${{ inputs.env }}" "${{ matrix.stacks }}"
 
-  # Only when everything succeeded (or there was nothing to do).
+  # Only when everything succeeded (or there was nothing to do), so failed teams are
+  # retried on the next run.
   marker:
-    needs: [plan, apply]
-    if: ${{ !cancelled() && inputs.only == '' && (needs.apply.result == 'success' || needs.plan.result == 'skipped') }}
+    needs: [detect, plan, apply]
+    if: ${{ !cancelled() && inputs.only == '' && needs.detect.result == 'success' && (needs.plan.result == 'skipped' || (needs.plan.result == 'success' && needs.apply.result == 'success')) }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.env }}
     steps:

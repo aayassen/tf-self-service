@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash # adds pipefail, so a failing command in a pipe fails the step
+
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -19,6 +23,7 @@ jobs:
     outputs:
       matrix: ${{ steps.changes.outputs.matrix }}
       checks_ok: ${{ steps.checks.outputs.ok }}
+      base: ${{ steps.base.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,16 +31,23 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Merge base
         id: base
-        run: echo "sha=$(git merge-base "origin/${{ github.base_ref }}" HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }} # also set for review events
+        run: |
+          sha=$(git merge-base "origin/$BASE_REF" HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       # Checking team membership needs a GitHub App token (PLATFORM_APP_TOKEN).
       - name: Platform approval
         id: approval
         env:
           GH_TOKEN: ${{ secrets.PLATFORM_APP_TOKEN || github.token }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # Only approvals of the latest commit count.
           approved=false
-          for user in $(gh api "repos/${{ github.repository }}/pulls/$PR/reviews" --jq '[.[] | select(.state=="APPROVED") | .user.login] | unique[]'); do
+          for user in $(gh api "repos/${{ github.repository }}/pulls/$PR/reviews" --paginate \
+              --jq "[.[] | select(.state == \"APPROVED\" and .commit_id == \"$HEAD_SHA\") | .user.login] | unique[]"); do
             if gh api "orgs/${{ github.repository_owner }}/teams/platform/memberships/$user" --jq .state 2>/dev/null | grep -q active; then approved=true; fi
           done
           echo "approved=$approved" >> "$GITHUB_OUTPUT"
@@ -44,18 +56,21 @@ jobs:
         env:
           PLATFORM_APPROVED: ${{ steps.approval.outputs.approved }}
         run: |
-          if scripts/ci/check.sh "${{ steps.base.outputs.sha }}" HEAD | tee findings.txt; then
+          if scripts/ci/check.sh "${{ steps.base.outputs.sha }}" HEAD >findings.txt 2>&1; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
           else
             echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
+          cat findings.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: findings
           path: findings.txt
       - name: Affected stacks
         id: changes
-        run: echo "matrix=$(scripts/ci/changes.sh "${{ steps.base.outputs.sha }}" HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          matrix=$(scripts/ci/changes.sh "${{ steps.base.outputs.sha }}" HEAD)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   plan:
     needs: detect
@@ -82,7 +97,7 @@ jobs:
       - name: Plan ${{ matrix.env }} (${{ matrix.count }} stack(s))
         env:
           EXECUTOR_ROLE_ARN: arn:aws:iam::${{ env.ACCOUNT }}:role/tofu-plan-${{ matrix.env }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ needs.detect.outputs.base }}
         run: scripts/ci/run-stacks.sh plan "${{ matrix.env }}" "${{ matrix.stacks }}"
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -93,6 +108,7 @@ jobs:
             .out/*/*/retain.txt
             .out/*/*/error.txt
           if-no-files-found: ignore
+          include-hidden-files: true
 
   report:
     needs: [detect, plan]
@@ -114,11 +130,11 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           PLANS_SKIPPED: ${{ vars.AWS_ACCOUNT_DEV == '' && needs.detect.outputs.checks_ok == 'true' }}
         run: |
-          grep '^✗' results/findings.txt > findings.txt || true
-          scripts/ci/summarize.sh results findings.txt > comment.md
+          scripts/ci/summarize.sh results results/findings.txt > comment.md
           if [[ $PLANS_SKIPPED == true ]]; then
             printf '\n> Plans skipped: no AWS account is configured for this repository.\n' >> comment.md
           fi
+          printf '\n**Next:** review → merge → dev and staging apply automatically → prod applies after platform approval.\n' >> comment.md
           cat comment.md >> "$GITHUB_STEP_SUMMARY"
           id=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" --paginate \
                  --jq '[.[] | select(.body | startswith("<!-- platform-plan -->"))][0].id // empty')

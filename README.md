@@ -49,7 +49,8 @@ There is one file per environment: `dev.yaml`, `staging.yaml`, `prod.yaml`.
    approval from the platform team.
 
 Behind the scenes, the same OpenTofu code runs once per team and environment, and each
-of those runs keeps its own state file. Teams never block or break each other.
+of those runs keeps its own state file. One team's mistake can't touch another team's
+resources, and a team whose plan fails is skipped while the others still apply.
 
 ---
 
@@ -102,8 +103,9 @@ The same two steps, for the whole file:
 
 ### Change the platform itself
 
-Changes to `modules/`, `stacks/`, `envs/` or `policy/` affect **every** team. The PR
-comment lists all of them, so you can see the full impact before merging.
+Changes to `modules/`, `stacks/`, `envs/`, `policy/` or `scripts/tf.sh` affect **every**
+team. The PR comment lists every team that would change, so you can see the full impact
+before merging.
 
 ---
 
@@ -142,6 +144,18 @@ The kind cluster defaults to the `kind-adam` context. Use another one with
 `make ministack-up KIND_CONTEXT=kind-<name>`.
 
 ---
+
+## Setting it up on GitHub
+
+Only needed to run the real pipeline (it needs AWS accounts):
+
+1. Run `bootstrap/` once in each AWS account (dev, staging, prod).
+2. Add repository variables `AWS_ACCOUNT_DEV`, `AWS_ACCOUNT_STAGING` and `AWS_ACCOUNT_PROD`.
+3. Create the environments `dev`, `staging` and `prod`, and allow them to deploy from
+   `main` only. This matters: AWS lets any workflow running in those environments apply.
+4. Create a `prod-approval` environment with the platform team as required reviewers.
+
+Until step 2 is done, pull requests still get the checks and a comment, just no plans.
 
 ## What's in the repo
 

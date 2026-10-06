@@ -95,6 +95,14 @@ PLATFORM_APPROVED=true expect_ok "direct public in prod with platform approval"
 fresh; team_file alpha "  - { name: data, visibility: public, public: { mode: direct, justification: x } }" >teams/alpha/dev.yaml; commit
 expect_ok "direct public in dev needs no approval"
 
+echo "summarize.sh"
+mkdir -p "$WORK/s/dev/alpha" "$WORK/s/dev/beta"
+echo '{}' >"$WORK/s/dev/alpha/plan.json"          # a plan with no resources at all
+echo "boom" >"$WORK/s/dev/beta/error.txt"
+out=$("$REPO/scripts/ci/summarize.sh" "$WORK/s" 2>&1) || true
+[[ $out == *"1 team stack(s) with no changes"* ]] && pass "empty plan counts as no changes" || fail "empty plan: $out"
+[[ $out == *"| dev | beta | ❌ failed"* && $out == *"boom"* ]] && pass "failed team shown with its error" || fail "failed team: $out"
+
 echo
 if ((failures > 0)); then echo "$failures CI script test(s) failed."; exit 1; fi
 echo "All CI script tests passed."

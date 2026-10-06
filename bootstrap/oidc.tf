@@ -11,7 +11,8 @@ locals {
   gha_trust = { for mode in local.ci_modes : mode => jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      # PRs and main can plan; only the GitHub environment can apply.
+      # PRs and main can plan. Apply needs the GitHub environment, so restrict the
+      # dev/staging/prod environments to the main branch in the repo settings.
       Sid       = "GitHubOIDC"
       Effect    = "Allow"
       Principal = { Federated = aws_iam_openid_connect_provider.github[0].arn }
